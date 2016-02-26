@@ -4,6 +4,17 @@
 
 This `acts_as` extension provides the capabilities for sorting and reordering a number of objects in a list. The class that has this specified needs to have a `position` column defined as an integer on the mapped database table.
 
+This is a fork of the original gem that strips out a large portion of the
+original public API. However, it uses postgres' window functions to ensure that
+the lists are always consistent. There may exist gaps when removing an item out
+of a list, however as long as the position is updated using the standard
+setters/save, positions in the list will *never* collide.
+
+Even if a collision is somehow caused, the next re-shuffle of the list will
+remove the position collision. This did not happen with the original
+`acts_as_list` - it was possible to create a situation where no normal
+operations would remove the collision.
+
 ## Installation
 
 In your Gemfile:
@@ -34,30 +45,8 @@ class TodoItem < ActiveRecord::Base
 end
 
 todo_list = TodoList.find(...)    
-todo_list.todo_items.first.move_to_bottom
-todo_list.todo_items.last.move_higher
+todo_list.position.first.update_attributes(position: 2)
 ```
-
-## Instance Methods Added To ActiveRecord Models
-
-You'll have a number of methods added to each instance of the ActiveRecord model that to which `acts_as_list` is added. 
-
-In `acts_as_list`, "higher" means further up the list (a lower `position`), and "lower" means further down the list (a higher `position`). That can be confusing, so it might make sense to add tests that validate that you're using the right method given your context.
-
-### Methods That Change Position and Reorder List
-
-- `list_item.insert_at(2)`
-- `list_item.move_lower` will do nothing if the item is the lowest item
-- `list_item.move_higher` will do nothing if the item is the highest item
-- `list_item.move_to_bottom`
-- `list_item.move_to_top`
-- `list_item.remove_from_list`
-
-### Methods That Change Position Without Reordering List
-
-- `list_item.increment_position`
-- `list_item.decrement_position`
-- `list_item.set_list_position(3)`
 
 ### Methods That Return Attributes of the Item's List Position
 - `list_item.first?`
