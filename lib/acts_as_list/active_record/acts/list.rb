@@ -115,9 +115,7 @@ module ActiveRecord
 
             before_destroy :reload_position
             after_destroy :decrement_positions_on_lower_items
-            before_update :check_scope
-            after_update :update_positions
-            before_validation :check_top_position
+            after_save :update_positions
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
           EOV
@@ -134,94 +132,50 @@ module ActiveRecord
       # lower in the list of all chapters. Likewise, <tt>chapter.first?</tt> would return +true+ if that chapter is
       # the first in the list of all chapters.
       module InstanceMethods
-        # Insert the item at the given position (defaults to the top position of 1).
-        def insert_at(position = acts_as_list_top)
-          insert_at_position(position)
-        end
+        def update_positions
+          tn = ActiveRecord::Base.connection.quote_table_name acts_as_list_class.table_name
+          pk = ActiveRecord::Base.connection.quote_column_name acts_as_list_class.primary_key
+          up = ActiveRecord::Base.connection.quote_table_name "updated_positions"
 
-        # Swap positions with the next lower item, if one exists.
-        def move_lower
-          return unless lower_item
+          c = changes[position_column]
 
-          acts_as_list_class.transaction do
-            lower_item.decrement_position
-            increment_position
+          if c && (c[0] < c[1])
+            # the position moved UP
+            # We should order colliding positions by newest last
+            sort_order = "ASC"
+          else
+            # The position moved DOWN
+            # we should order colliding positions by newest first
+            sort_order = "DESC"
           end
-        end
 
-        # Swap positions with the next higher item, if one exists.
-        def move_higher
-          return unless higher_item
-
-          acts_as_list_class.transaction do
-            higher_item.increment_position
-            decrement_position
+          if add_new_at == :top
+            nulls_go = "FIRST"
+          else
+            nulls_go = "LAST"
           end
+
+          window_function = acts_as_list_list
+            .select("row_number() OVER ( ORDER BY #{position_column} ASC NULLS #{nulls_go}, updated_at #{sort_order}) AS #{position_column}, #{pk}")
+            .to_sql
+
+          acts_as_list_class.connection.execute %{UPDATE #{tn} SET #{position_column} = #{up}.#{position_column}
+            FROM (#{window_function}) AS updated_positions WHERE #{tn}.#{pk}=#{up}.#{pk}}
         end
 
-        # Move to the bottom of the list. If the item is already in the list, the items below it have their
-        # position adjusted accordingly.
-        def move_to_bottom
-          return unless in_list?
-          acts_as_list_class.transaction do
-            decrement_positions_on_lower_items
-            assume_bottom_position
-          end
+        def reload_position
+          reload
         end
 
-        # Move to the top of the list. If the item is already in the list, the items above it have their
-        # position adjusted accordingly.
-        def move_to_top
-          return unless in_list?
-          acts_as_list_class.transaction do
-            increment_positions_on_higher_items
-            assume_top_position
-          end
-        end
+        def add_to_list_top ; acts_as_list_list.minimum(self.position_column) ; end
+        def add_to_list_bottom ; acts_as_list_list.maximum(self.position_column) ; end
 
-        # Removes the item from the list.
-        def remove_from_list
-          if in_list?
-            decrement_positions_on_lower_items
-            set_list_position(nil)
-          end
-        end
-
-        # Move the item within scope. If a position within the new scope isn't supplied, the item will
-        # be appended to the end of the list.
-        def move_within_scope(scope_id)
-          send("#{scope_name}=", scope_id)
-          save!
-        end
-
-        # Increase the position of this item without adjusting the rest of the list.
-        def increment_position
-          return unless in_list?
-          set_list_position(self.send(position_column).to_i + 1)
-        end
-
-        # Decrease the position of this item without adjusting the rest of the list.
-        def decrement_position
-          return unless in_list?
-          set_list_position(self.send(position_column).to_i - 1)
-        end
-
-        # Return +true+ if this object is the first in the list.
         def first?
-          return false unless in_list?
           self.send(position_column) == acts_as_list_top
         end
 
-        # Return +true+ if this object is the last in the list.
         def last?
-          return false unless in_list?
           self.send(position_column) == bottom_position_in_list
-        end
-
-        # Return the next higher item in the list.
-        def higher_item
-          return nil unless in_list?
-          higher_items(1).first
         end
 
         # Return the next n higher items in the list
@@ -238,7 +192,6 @@ module ActiveRecord
 
         # Return the next lower item in the list.
         def lower_item
-          return nil unless in_list?
           lower_items(1).first
         end
 
@@ -254,15 +207,6 @@ module ActiveRecord
             order("#{acts_as_list_class.table_name}.#{position_column} ASC")
         end
 
-        # Test if this record is in a list
-        def in_list?
-          !not_in_list?
-        end
-
-        def not_in_list?
-          send(position_column).nil?
-        end
-
         def default_position
           acts_as_list_class.columns_hash[position_column.to_s].default
         end
@@ -275,199 +219,16 @@ module ActiveRecord
         def set_list_position(new_position)
           write_attribute position_column, new_position
           save(validate: false)
+          update_positions
         end
 
         private
-          def acts_as_list_list
-            acts_as_list_class.unscoped do
-              acts_as_list_class.where(scope_condition)
-            end
+
+        def acts_as_list_list
+          acts_as_list_class.unscoped do
+            acts_as_list_class.where(scope_condition)
           end
-
-          def add_to_list_top
-            increment_positions_on_all_items
-            self[position_column] = acts_as_list_top
-          end
-
-          def add_to_list_bottom
-            if not_in_list? || scope_changed? && !@position_changed || default_position?
-              self[position_column] = bottom_position_in_list.to_i + 1
-            else
-              increment_positions_on_lower_items(self[position_column], id)
-            end
-          end
-
-          # Overwrite this method to define the scope of the list changes
-          def scope_condition() {} end
-
-          # Returns the bottom position number in the list.
-          #   bottom_position_in_list    # => 2
-          def bottom_position_in_list(except = nil)
-            item = bottom_item(except)
-            item ? item.send(position_column) : acts_as_list_top - 1
-          end
-
-          # Returns the bottom item
-          def bottom_item(except = nil)
-            conditions = scope_condition
-            conditions = except ? "#{self.class.primary_key} != #{self.class.connection.quote(except.id)}" : {}
-            acts_as_list_list.in_list.where(
-              conditions
-            ).order(
-              "#{acts_as_list_class.table_name}.#{position_column} DESC"
-            ).first
-          end
-
-          # Forces item to assume the bottom position in the list.
-          def assume_bottom_position
-            set_list_position(bottom_position_in_list(self).to_i + 1)
-          end
-
-          # Forces item to assume the top position in the list.
-          def assume_top_position
-            set_list_position(acts_as_list_top)
-          end
-
-          # This has the effect of moving all the higher items up one.
-          def decrement_positions_on_higher_items(position)
-            acts_as_list_list.where(
-              "#{position_column} <= #{position}"
-            ).update_all(
-              "#{position_column} = (#{position_column} - 1)"
-            )
-          end
-
-          # This has the effect of moving all the lower items up one.
-          def decrement_positions_on_lower_items(position=nil)
-            return unless in_list?
-            position ||= send(position_column).to_i
-            acts_as_list_list.where(
-              "#{position_column} > #{position}"
-            ).update_all(
-              "#{position_column} = (#{position_column} - 1)"
-            )
-          end
-
-          # This has the effect of moving all the higher items down one.
-          def increment_positions_on_higher_items
-            return unless in_list?
-            acts_as_list_list.where(
-              "#{position_column} < #{send(position_column).to_i}"
-            ).update_all(
-              "#{position_column} = (#{position_column} + 1)"
-            )
-          end
-
-          # This has the effect of moving all the lower items down one.
-          def increment_positions_on_lower_items(position, avoid_id = nil)
-            avoid_id_condition = avoid_id ? " AND #{self.class.primary_key} != #{self.class.connection.quote(avoid_id)}" : ''
-
-            acts_as_list_list.where(
-              "#{position_column} >= #{position}#{avoid_id_condition}"
-            ).update_all(
-              "#{position_column} = (#{position_column} + 1)"
-            )
-          end
-
-          # Increments position (<tt>position_column</tt>) of all items in the list.
-          def increment_positions_on_all_items
-            acts_as_list_list.update_all(
-              "#{position_column} = (#{position_column} + 1)"
-            )
-          end
-
-          # Reorders intermediate items to support moving an item from old_position to new_position.
-          def shuffle_positions_on_intermediate_items(old_position, new_position, avoid_id = nil)
-            return if old_position == new_position
-            avoid_id_condition = avoid_id ? " AND #{self.class.primary_key} != #{self.class.connection.quote(avoid_id)}" : ''
-
-            if old_position < new_position
-              # Decrement position of intermediate items
-              #
-              # e.g., if moving an item from 2 to 5,
-              # move [3, 4, 5] to [2, 3, 4]
-              acts_as_list_list.where(
-                "#{position_column} > #{old_position}"
-              ).where(
-                "#{position_column} <= #{new_position}#{avoid_id_condition}"
-              ).update_all(
-                "#{position_column} = (#{position_column} - 1)"
-              )
-            else
-              # Increment position of intermediate items
-              #
-              # e.g., if moving an item from 5 to 2,
-              # move [2, 3, 4] to [3, 4, 5]
-              acts_as_list_list.where(
-                "#{position_column} >= #{new_position}"
-              ).where(
-                "#{position_column} < #{old_position}#{avoid_id_condition}"
-              ).update_all(
-                "#{position_column} = (#{position_column} + 1)"
-              )
-            end
-          end
-
-          def insert_at_position(position)
-            return set_list_position(position) if new_record?
-            if in_list?
-              old_position = send(position_column).to_i
-              return if position == old_position
-              shuffle_positions_on_intermediate_items(old_position, position)
-            else
-              increment_positions_on_lower_items(position)
-            end
-            set_list_position(position)
-          end
-
-          # used by insert_at_position instead of remove_from_list, as postgresql raises error if position_column has non-null constraint
-          def store_at_0
-            if in_list?
-              old_position = send(position_column).to_i
-              set_list_position(0)
-              decrement_positions_on_lower_items(old_position)
-            end
-          end
-
-          def update_positions
-            old_position = send("#{position_column}_was").to_i
-            new_position = send(position_column).to_i
-
-            return unless acts_as_list_list.where(
-              "#{position_column} = #{new_position}"
-            ).count > 1
-            shuffle_positions_on_intermediate_items old_position, new_position, id
-          end
-
-          # Temporarily swap changes attributes with current attributes
-          def swap_changed_attributes
-            @changed_attributes.each do |k, _|
-              if self.class.column_names.include? k
-                @changed_attributes[k], self[k] = self[k], @changed_attributes[k]
-              end
-            end
-          end
-
-          def check_scope
-            if scope_changed?
-              swap_changed_attributes
-              send('decrement_positions_on_lower_items') if lower_item
-              swap_changed_attributes
-              send("add_to_list_#{add_new_at}")
-            end
-          end
-
-          def reload_position
-            self.reload
-          end
-
-          # This check is skipped if the position is currently the default position from the table
-          # as modifying the default position on creation is handled elsewhere
-          def check_top_position
-            if send(position_column) && !default_position? && send(position_column) < acts_as_list_top
-              self[position_column] = acts_as_list_top
-            end
-          end
+        end
       end
     end
   end
