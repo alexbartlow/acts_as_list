@@ -139,7 +139,7 @@ module ActiveRecord
 
           c = changes[position_column]
 
-          if c && (c[0] < c[1])
+          if c && c[0] && c[1] && (c[0] < c[1])
             # the position moved UP
             # We should order colliding positions by newest last
             sort_order = "ASC"
