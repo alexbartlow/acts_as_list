@@ -113,17 +113,13 @@ module ActiveRecord
               attr_accessible :#{configuration[:column]}
             end
 
-            before_destroy :reload_position
-            after_destroy :decrement_positions_on_lower_items
+            after_destroy :update_positions
             after_save :update_positions
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
           EOV
 
-          if configuration[:add_new_at].present?
-            self.send(:before_create, "add_to_list_#{configuration[:add_new_at]}")
-          end
-
+          self.send(:before_create, "add_to_list_#{configuration[:add_new_at]}")
         end
       end
 
