@@ -167,7 +167,7 @@ module ActiveRecord
           self.assign_attributes({self.position_column => acts_as_list_list.minimum(self.position_column) }, {without_protection: true})
         end
         def add_to_list_bottom
-          self.assign_attributes({self.position_column => acts_as_list_list.maximum(self.position_column) + 1}, {without_protection: true})
+          self.assign_attributes({self.position_column => (acts_as_list_list.maximum(self.position_column) || 0) + 1}, {without_protection: true})
         end
 
         def first?
