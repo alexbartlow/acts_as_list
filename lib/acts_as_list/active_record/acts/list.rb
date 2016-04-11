@@ -114,7 +114,8 @@ module ActiveRecord
             end
 
             after_destroy :update_positions
-            after_save :update_positions
+            after_create :update_positions
+            after_update :update_positions_if_necessary
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
           EOV
@@ -128,6 +129,10 @@ module ActiveRecord
       # lower in the list of all chapters. Likewise, <tt>chapter.first?</tt> would return +true+ if that chapter is
       # the first in the list of all chapters.
       module InstanceMethods
+        def update_positions_if_necessary
+          update_positions if scope_changed? || changes[position_column]
+        end
+
         def update_positions
           tn = ActiveRecord::Base.connection.quote_table_name acts_as_list_class.table_name
           pk = ActiveRecord::Base.connection.quote_column_name acts_as_list_class.primary_key

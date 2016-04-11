@@ -53,6 +53,7 @@ end
 
 class ListMixin < Mixin
   acts_as_list column: "pos", scope: :parent
+
 end
 
 class ListMixinSub1 < ListMixin
@@ -176,6 +177,19 @@ class ActsAsListTestCase < Minitest::Test
     l.save
 
     assert_order [1,3,2,4,5]
+  end
+
+  def test_doesnt_save_if_not_needed
+    $update_positions_called = false
+    node = ListMixin.last
+
+    def node.update_positions
+      $update_positions_called = true
+    end
+    node.state = 12
+    node.save
+
+    assert_equal $update_positions_called, false
   end
 end
 
