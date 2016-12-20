@@ -4,6 +4,21 @@ module ActiveRecord
       def self.included(base)
         base.extend(ClassMethods)
       end
+      
+      # Add ability to skip callbacks for save/update.
+      def self.skip_callbacks
+        begin
+          @skip_cb = true
+          yield
+        ensure
+          @skip_cb = false
+        end
+      end
+      
+      # Return .skip_cb value.
+      def self.skip_cb
+        @skip_cb
+      end
 
       # This +acts_as+ extension provides the capabilities for sorting and reordering a number of objects in a list.
       # The class that has this specified needs to have a +position+ column defined as an integer on
@@ -23,21 +38,6 @@ module ActiveRecord
       #   todo_list.first.move_to_bottom
       #   todo_list.last.move_higher
       module ClassMethods
-        # Add ability to skip callbacks for save/update.
-        def self.skip_callbacks
-          begin
-            @skip_cb = true
-            yield
-          ensure
-            @skip_cb = false
-          end
-        end
-        
-        # Return .skip_cb value.
-        def self.skip_cb
-          @skip_cb
-        end
-        
         # Configuration options are:
         #
         # * +column+ - specifies the column name to use for keeping the position integer (default: +position+)
@@ -149,7 +149,8 @@ module ActiveRecord
         end
 
         def update_positions
-          unless ActsAsList.skip_cb
+          debugger
+          unless ActiveRecord::Acts::List.skip_cb
             tn = ActiveRecord::Base.connection.quote_table_name acts_as_list_class.table_name
             pk = ActiveRecord::Base.connection.quote_column_name acts_as_list_class.primary_key
             up = ActiveRecord::Base.connection.quote_table_name "updated_positions"
