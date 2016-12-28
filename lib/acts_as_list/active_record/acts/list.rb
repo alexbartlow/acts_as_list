@@ -14,7 +14,7 @@ module ActiveRecord
           @skip_cb = false
         end
       end
-      
+        
       # Return .skip_cb value.
       def self.skip_cb
         @skip_cb
@@ -129,7 +129,7 @@ module ActiveRecord
             end
 
             after_destroy :update_positions
-            after_create :update_positions
+            after_create :update_positions, unless: Proc.new{ ActiveRecord::Acts::List.skip_cb }
             after_update :update_positions_if_necessary
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
@@ -149,36 +149,34 @@ module ActiveRecord
         end
 
         def update_positions
-          unless ActiveRecord::Acts::List.skip_cb
-            tn = ActiveRecord::Base.connection.quote_table_name acts_as_list_class.table_name
-            pk = ActiveRecord::Base.connection.quote_column_name acts_as_list_class.primary_key
-            up = ActiveRecord::Base.connection.quote_table_name "updated_positions"
+          tn = ActiveRecord::Base.connection.quote_table_name acts_as_list_class.table_name
+          pk = ActiveRecord::Base.connection.quote_column_name acts_as_list_class.primary_key
+          up = ActiveRecord::Base.connection.quote_table_name "updated_positions"
 
-            c = changes[position_column]
+          c = changes[position_column]
 
-            if c && c[0] && c[1] && (c[0] < c[1])
-              # the position moved UP
-              # We should order colliding positions by newest last
-              sort_order = "ASC"
-            else
-              # The position moved DOWN
-              # we should order colliding positions by newest first
-              sort_order = "DESC"
-            end
-
-            if add_new_at == :top
-              nulls_go = "FIRST"
-            else
-              nulls_go = "LAST"
-            end
-
-            window_function = acts_as_list_list
-              .select("row_number() OVER ( ORDER BY #{position_column} ASC NULLS #{nulls_go}, updated_at #{sort_order}) AS #{position_column}, #{pk}")
-              .to_sql
-
-            acts_as_list_class.connection.execute %{UPDATE #{tn} SET #{position_column} = #{up}.#{position_column}
-              FROM (#{window_function}) AS updated_positions WHERE #{tn}.#{pk}=#{up}.#{pk}}
+          if c && c[0] && c[1] && (c[0] < c[1])
+            # the position moved UP
+            # We should order colliding positions by newest last
+            sort_order = "ASC"
+          else
+            # The position moved DOWN
+            # we should order colliding positions by newest first
+            sort_order = "DESC"
           end
+
+          if add_new_at == :top
+            nulls_go = "FIRST"
+          else
+            nulls_go = "LAST"
+          end
+
+          window_function = acts_as_list_list
+            .select("row_number() OVER ( ORDER BY #{position_column} ASC NULLS #{nulls_go}, updated_at #{sort_order}) AS #{position_column}, #{pk}")
+            .to_sql
+
+          acts_as_list_class.connection.execute %{UPDATE #{tn} SET #{position_column} = #{up}.#{position_column}
+            FROM (#{window_function}) AS updated_positions WHERE #{tn}.#{pk}=#{up}.#{pk}}
         end
 
         def reload_position
