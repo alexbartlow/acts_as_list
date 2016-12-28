@@ -149,7 +149,6 @@ module ActiveRecord
         end
 
         def update_positions
-          debugger
           unless ActiveRecord::Acts::List.skip_cb
             tn = ActiveRecord::Base.connection.quote_table_name acts_as_list_class.table_name
             pk = ActiveRecord::Base.connection.quote_column_name acts_as_list_class.primary_key
