@@ -7,17 +7,18 @@ module ActiveRecord
       
       # Add ability to skip callbacks for save/update.
       def self.skip_callbacks
+        old_skip_cb = @skip_cb
+        @skip_cb = true
         begin
-          @skip_cb = true
           yield
         ensure
-          @skip_cb = false
+          @skip_cb = old_skip_cb
         end
       end
         
       # Return .skip_cb value.
-      def self.skip_cb
-        @skip_cb
+      def self.skip_cb?
+        @skip_cb == true
       end
 
       # This +acts_as+ extension provides the capabilities for sorting and reordering a number of objects in a list.
@@ -129,7 +130,7 @@ module ActiveRecord
             end
 
             after_destroy :update_positions
-            after_create :update_positions, unless: Proc.new{ ActiveRecord::Acts::List.skip_cb }
+            after_create :update_positions, unless: Proc.new{ ActiveRecord::Acts::List.skip_cb? }
             after_update :update_positions_if_necessary
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
