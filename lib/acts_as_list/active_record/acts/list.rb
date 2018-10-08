@@ -129,9 +129,9 @@ module ActiveRecord
               attr_accessible :#{configuration[:column]}
             end
 
-            after_destroy :update_positions
-            after_create :update_positions, unless: Proc.new{ ActiveRecord::Acts::List.skip_cb? }
-            after_update :update_positions_if_necessary
+            after_destroy :update_positions, unless: -> { ActiveRecord::Acts::List.skip_cb? }
+            after_create :update_positions, unless: -> { ActiveRecord::Acts::List.skip_cb? }
+            after_update :update_positions_if_necessary, unless: -> { ActiveRecord::Acts::List.skip_cb? }
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
           EOV
