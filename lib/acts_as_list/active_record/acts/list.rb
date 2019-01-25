@@ -135,7 +135,7 @@ module ActiveRecord
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
 
-            def self.insert_after_record_with_position(records, targeted_record_position)
+            def self.move_after_record_with_position(records, targeted_record_position)
               transaction do
                 ActiveRecord::Acts::List.skip_callbacks do
                   records.reverse.each do |record|
