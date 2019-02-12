@@ -134,6 +134,19 @@ module ActiveRecord
             after_update :update_positions_if_necessary, unless: -> { ActiveRecord::Acts::List.skip_cb? }
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
+
+            def self.move_after_record_with_position(records, targeted_record_position)
+              transaction do
+                ActiveRecord::Acts::List.skip_callbacks do
+                  records.reverse.each do |record|
+                    record.update(#{configuration[:column]}: targeted_record_position.to_i + 1)
+                    record.touch
+                  end
+                end
+
+                records.first&.update_positions
+              end
+            end
           EOV
 
           self.send(:before_create, "add_to_list_#{configuration[:add_new_at]}")
