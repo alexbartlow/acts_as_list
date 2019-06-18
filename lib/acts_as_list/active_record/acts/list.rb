@@ -15,10 +15,22 @@ module ActiveRecord
           @skip_cb = old_skip_cb
         end
       end
-        
+
       # Return .skip_cb value.
       def self.skip_cb?
         @skip_cb == true
+      end
+
+      def self.with_delayed_updates
+        @delayed_updates = true
+
+        yield
+      ensure
+        @delayed_updates = false
+      end
+
+      def self.delayed_updates?
+        @delayed_updates == true
       end
 
       # This +acts_as+ extension provides the capabilities for sorting and reordering a number of objects in a list.
@@ -189,8 +201,22 @@ module ActiveRecord
             .select("row_number() OVER ( ORDER BY #{position_column} ASC NULLS #{nulls_go}, updated_at #{sort_order}) AS #{position_column}, #{pk}")
             .to_sql
 
-          acts_as_list_class.connection.execute %{UPDATE #{tn} SET #{position_column} = #{up}.#{position_column}
-            FROM (#{window_function}) AS updated_positions WHERE #{tn}.#{pk}=#{up}.#{pk}}
+          sql = <<~SQL
+            UPDATE #{tn} SET #{position_column} = #{up}.#{position_column}
+            FROM (#{window_function}) AS updated_positions WHERE #{tn}.#{pk}=#{up}.#{pk}
+          SQL
+
+          if ActiveRecord::Acts::List.delayed_updates?
+            delay(unique: true, in: 10.seconds)._execute_position_update!(sql)
+          else
+            _execute_position_update!(sql)
+          end
+        end
+
+        # Exists as it's own method so it can be easily delayed. connection.delay.execute results
+        # in a 'stack level too deep error' when serializing.
+        def _execute_position_update!(sql)
+          acts_as_list_class.connection.execute(sql)
         end
 
         def reload_position
