@@ -4,6 +4,34 @@ module ActiveRecord
       def self.included(base)
         base.extend(ClassMethods)
       end
+      
+      # Add ability to skip callbacks for save/update.
+      def self.skip_callbacks
+        old_skip_cb = @skip_cb
+        @skip_cb = true
+        begin
+          yield
+        ensure
+          @skip_cb = old_skip_cb
+        end
+      end
+
+      # Return .skip_cb value.
+      def self.skip_cb?
+        @skip_cb == true
+      end
+
+      def self.with_delayed_updates
+        @delayed_updates = true
+
+        yield
+      ensure
+        @delayed_updates = false
+      end
+
+      def self.delayed_updates?
+        @delayed_updates == true
+      end
 
       # This +acts_as+ extension provides the capabilities for sorting and reordering a number of objects in a list.
       # The class that has this specified needs to have a +position+ column defined as an integer on
@@ -113,11 +141,24 @@ module ActiveRecord
               attr_accessible :#{configuration[:column]}
             end
 
-            after_destroy :update_positions
-            after_create :update_positions
-            after_update :update_positions_if_necessary
+            after_destroy :update_positions, unless: -> { ActiveRecord::Acts::List.skip_cb? }
+            after_create :update_positions, unless: -> { ActiveRecord::Acts::List.skip_cb? }
+            after_update :update_positions_if_necessary, unless: -> { ActiveRecord::Acts::List.skip_cb? }
 
             scope :in_list, lambda { where("#{table_name}.#{configuration[:column]} IS NOT NULL") }
+
+            def self.move_after_record_with_position(records, targeted_record_position)
+              transaction do
+                ActiveRecord::Acts::List.skip_callbacks do
+                  records.reverse.each do |record|
+                    record.update(#{configuration[:column]}: targeted_record_position.to_i + 1)
+                    record.touch
+                  end
+                end
+
+                records.first&.update_positions
+              end
+            end
           EOV
 
           self.send(:before_create, "add_to_list_#{configuration[:add_new_at]}")
@@ -160,8 +201,22 @@ module ActiveRecord
             .select("row_number() OVER ( ORDER BY #{position_column} ASC NULLS #{nulls_go}, updated_at #{sort_order}) AS #{position_column}, #{pk}")
             .to_sql
 
-          acts_as_list_class.connection.execute %{UPDATE #{tn} SET #{position_column} = #{up}.#{position_column}
-            FROM (#{window_function}) AS updated_positions WHERE #{tn}.#{pk}=#{up}.#{pk}}
+          sql = <<~SQL
+            UPDATE #{tn} SET #{position_column} = #{up}.#{position_column}
+            FROM (#{window_function}) AS updated_positions WHERE #{tn}.#{pk}=#{up}.#{pk}
+          SQL
+
+          if ActiveRecord::Acts::List.delayed_updates?
+            delay(unique: true, in: 10.seconds)._execute_position_update!(sql)
+          else
+            _execute_position_update!(sql)
+          end
+        end
+
+        # Exists as it's own method so it can be easily delayed. connection.delay.execute results
+        # in a 'stack level too deep error' when serializing.
+        def _execute_position_update!(sql)
+          acts_as_list_class.connection.execute(sql)
         end
 
         def reload_position
